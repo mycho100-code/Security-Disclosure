@@ -164,3 +164,15 @@ def bulk_update_classifications(table_name: str, updates: list[dict]):
               u["match_type"], u["match_score"], u["matched_desc"], u["id"]))
     conn.commit()
     conn.close()
+
+
+def reset_classifications(table_name: str):
+    """분석 실행 전 모든 분류값·매칭 결과를 초기화 (이전 분석 잔존 방지)"""
+    conn = get_conn()
+    conn.execute(f"""
+        UPDATE {table_name}
+        SET exclude_yn = '', it_yn = '', sec_yn = '',
+            match_type = '', match_score = 0, matched_desc = ''
+    """)
+    conn.commit()
+    conn.close()

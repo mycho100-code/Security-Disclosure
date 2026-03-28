@@ -26,7 +26,10 @@ def run_matching(target_df: pd.DataFrame, master_df: pd.DataFrame,
     target_df["_key"] = target_df["description"].apply(preprocess)
     master_df["_key"] = master_df["description"].apply(preprocess)
 
-    # 결과 컬럼 초기화
+    # 결과 컬럼 초기화 (★ 분류값도 초기화하여 이전 AI분류 결과 잔존 방지)
+    target_df["exclude_yn"] = ""
+    target_df["it_yn"] = ""
+    target_df["sec_yn"] = ""
     target_df["match_type"] = ""
     target_df["match_score"] = 0.0
     target_df["matched_desc"] = ""

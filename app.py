@@ -9,6 +9,7 @@ import io
 from db_helper import (
     init_db, load_table, insert_row, update_row,
     delete_rows, replace_all, truncate_table, bulk_update_classifications,
+    reset_classifications,
 )
 from matching_engine import run_matching
 from ai_classifier import classify_batch
@@ -187,7 +188,7 @@ with st.sidebar:
     else:
         st.markdown('<p class="sidebar-title">🛡️ AI기반 정보보호공시 솔루션</p>', unsafe_allow_html=True)
 
-    st.markdown('<p class="sidebar-subtitle">AI기반 정보보호공시 솔루션</p>', unsafe_allow_html=True)
+    st.markdown('<p class="sidebar-subtitle">자산/비용 자동분류</p>', unsafe_allow_html=True)
     st.markdown("---")
 
     # ── 라디오 메뉴 (CSS로 책갈피 스타일 적용) ──
@@ -512,6 +513,9 @@ elif menu == "🔍 분석":
                 st.error("⚠️ 기준정보가 없습니다. 먼저 기준정보관리에서 마스터 데이터를 등록해 주세요.")
             else:
                 with st.spinner("분석 중... Description 비교 및 유사도 매칭을 수행합니다."):
+                    # ★ 분석 실행 전 DB의 이전 분류값·매칭 결과 초기화
+                    reset_classifications(target_table)
+                    target_df = load_table(target_table)  # 초기화된 데이터 다시 로드
                     result_df, stats = run_matching(target_df, master_df, threshold=threshold)
 
                 # 통계
