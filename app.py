@@ -1,5 +1,5 @@
 """
-정보보호공시 분류 솔루션
+정보보호공시 솔루션
 자산/비용 자동분류 - 실제 엑셀 컬럼 구조 반영 버전
 """
 import streamlit as st
@@ -17,7 +17,7 @@ from ai_classifier import classify_batch
 # 페이지 설정
 # ────────────────────────────────────────
 st.set_page_config(
-    page_title="정보보호공시 분류 솔루션",
+    page_title="AI기반 정보보호공시 솔루션",
     page_icon="🛡️",
     layout="wide",
 )
