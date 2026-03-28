@@ -134,8 +134,11 @@ def delete_rows(table_name: str, ids: list):
 
 
 def replace_all(table_name: str, df: pd.DataFrame):
+    """테이블 전체 삭제 후 DataFrame 일괄 삽입 (ID 자동증가 초기화 포함)"""
     conn = get_conn()
     conn.execute(f"DELETE FROM {table_name}")
+    # AUTOINCREMENT 카운터 초기화 (id가 1부터 다시 시작)
+    conn.execute(f"DELETE FROM sqlite_sequence WHERE name=?", (table_name,))
     df.to_sql(table_name, conn, if_exists="append", index=False)
     conn.commit()
     conn.close()

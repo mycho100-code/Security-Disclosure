@@ -1,5 +1,5 @@
 """
-정보보호공시 솔루션
+AI기반 정보보호공시 솔루션
 자산/비용 자동분류 - 실제 엑셀 컬럼 구조 반영 버전
 """
 import streamlit as st
@@ -47,7 +47,7 @@ st.markdown("""
     /* 로고·타이틀 중앙 (검정색 텍스트) */
     .sidebar-logo { text-align:center; padding:1rem 0 0.2rem 0; }
     .sidebar-logo img { max-width:140px; border-radius:8px; }
-    .sidebar-title { text-align:center; color:#1E3A5F; font-size:1.4rem; font-weight:700;
+    .sidebar-title { text-align:center; color:#1E3A5F; font-size:1.2rem; font-weight:700;
                      margin:0 0 0.1rem 0; padding:0; }
     .sidebar-subtitle { text-align:center; color:#333; font-size:0.9rem; font-weight:500;
                         margin:0 0 0.8rem 0; padding:0; }
@@ -185,9 +185,9 @@ with st.sidebar:
         st.markdown(f'<div class="sidebar-logo"><img src="data:image/png;base64,{logo_b64}"></div>',
                     unsafe_allow_html=True)
     else:
-        st.markdown('<p class="sidebar-title">🛡️ 정보보호공시</p>', unsafe_allow_html=True)
+        st.markdown('<p class="sidebar-title">🛡️ AI기반 정보보호공시 솔루션</p>', unsafe_allow_html=True)
 
-    st.markdown('<p class="sidebar-subtitle">AI기반 정보보호공시 솔루션</p>', unsafe_allow_html=True)
+    st.markdown('<p class="sidebar-subtitle">자산/비용 자동분류</p>', unsafe_allow_html=True)
     st.markdown("---")
 
     # ── 라디오 메뉴 (CSS로 책갈피 스타일 적용) ──
@@ -463,17 +463,38 @@ elif menu == "🔍 분석":
                     st.caption(f"총 {len(df_db)}건")
 
                     if st.button("📥 임시 테이블에 저장", type="primary", key=f"btn_save_{tab_key}"):
+                        # ★ 분류값 초기화 (이전 분석 결과 또는 다운로드 파일의 값 제거)
+                        df_db["exclude_yn"] = ""
+                        df_db["it_yn"] = ""
+                        df_db["sec_yn"] = ""
+                        # ★ 매칭 컬럼을 명시적으로 추가 (DEFAULT 의존 제거)
+                        df_db["match_type"] = ""
+                        df_db["match_score"] = 0.0
+                        df_db["matched_desc"] = ""
+                        # 기존 데이터 완전 삭제 후 삽입
                         truncate_table(target_table)
                         replace_all(target_table, df_db)
-                        st.success(f"✅ {len(df_db)}건이 임시 테이블에 저장되었습니다.")
+                        st.success(f"✅ {len(df_db)}건이 업로드되었습니다. (이전 분석 결과 초기화)")
                         st.rerun()
             except Exception as e:
                 st.error(f"파일 처리 오류: {e}")
 
-        # 현재 임시 테이블 상태
+        # 현재 임시 테이블 상태 + 초기화 버튼
         target_df = load_table(target_table)
         if not target_df.empty:
-            st.info(f"📌 현재 임시 테이블에 **{len(target_df)}건**의 데이터가 있습니다.")
+            col_info, col_reset = st.columns([3, 1])
+            with col_info:
+                # 이전 분석 결과 여부 확인
+                has_prev = target_df["match_type"].apply(
+                    lambda x: x != "" if isinstance(x, str) else False
+                ).any() if "match_type" in target_df.columns else False
+                status = " (분석 완료)" if has_prev else ""
+                st.info(f"📌 현재 임시 테이블에 **{len(target_df)}건**의 데이터가 있습니다.{status}")
+            with col_reset:
+                if st.button("🗑️ 초기화", key=f"btn_reset_{tab_key}", help="임시 테이블의 모든 데이터를 삭제합니다"):
+                    truncate_table(target_table)
+                    st.success("임시 데이터가 초기화되었습니다.")
+                    st.rerun()
 
         st.markdown("---")
 
