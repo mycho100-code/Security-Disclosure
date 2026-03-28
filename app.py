@@ -187,7 +187,7 @@ with st.sidebar:
     else:
         st.markdown('<p class="sidebar-title">🛡️ AI기반 정보보호공시 솔루션</p>', unsafe_allow_html=True)
 
-    st.markdown('<p class="sidebar-subtitle">자산/비용 자동분류</p>', unsafe_allow_html=True)
+    st.markdown('<p class="sidebar-subtitle">AI기반 정보보호공시 솔루션</p>', unsafe_allow_html=True)
     st.markdown("---")
 
     # ── 라디오 메뉴 (CSS로 책갈피 스타일 적용) ──
