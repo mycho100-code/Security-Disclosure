@@ -100,6 +100,94 @@ def init_db():
     conn.commit()
     conn.close()
 
+    # ── 사용자 테이블 & 기본 Admin 계정 ──
+    _init_users()
+
+
+def _init_users():
+    """사용자 테이블 생성 및 기본 Admin 계정 삽입"""
+    import hashlib
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            role     TEXT NOT NULL DEFAULT 'user',
+            name     TEXT DEFAULT ''
+        )
+    """)
+    # Admin 계정이 없으면 생성
+    cur.execute("SELECT COUNT(*) FROM users WHERE username = 'Admin'")
+    if cur.fetchone()[0] == 0:
+        pw_hash = hashlib.sha256("Admin".encode()).hexdigest()
+        cur.execute(
+            "INSERT INTO users (username, password, role, name) VALUES (?, ?, ?, ?)",
+            ("Admin", pw_hash, "admin", "관리자")
+        )
+    conn.commit()
+    conn.close()
+
+
+def verify_user(username: str, password: str) -> dict | None:
+    """로그인 인증. 성공 시 {id, username, role, name} 반환, 실패 시 None"""
+    import hashlib
+    pw_hash = hashlib.sha256(password.encode()).hexdigest()
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT id, username, role, name FROM users WHERE username = ? AND password = ?",
+                (username, pw_hash))
+    row = cur.fetchone()
+    conn.close()
+    if row:
+        return {"id": row[0], "username": row[1], "role": row[2], "name": row[3]}
+    return None
+
+
+def get_all_users() -> pd.DataFrame:
+    """전체 사용자 목록 조회 (비밀번호 제외)"""
+    conn = get_conn()
+    df = pd.read_sql("SELECT id, username, role, name FROM users", conn)
+    conn.close()
+    return df
+
+
+def add_user(username: str, password: str, role: str = "user", name: str = "") -> bool:
+    """사용자 추가. 성공 True, 중복 시 False"""
+    import hashlib
+    pw_hash = hashlib.sha256(password.encode()).hexdigest()
+    conn = get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO users (username, password, role, name) VALUES (?, ?, ?, ?)",
+            (username, pw_hash, role, name)
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except sqlite3.IntegrityError:
+        conn.close()
+        return False
+
+
+def delete_user(user_id: int):
+    """사용자 삭제 (Admin 제외)"""
+    conn = get_conn()
+    conn.execute("DELETE FROM users WHERE id = ? AND username != 'Admin'", (int(user_id),))
+    conn.commit()
+    conn.close()
+
+
+def reset_password(user_id: int, new_password: str):
+    """비밀번호 초기화"""
+    import hashlib
+    pw_hash = hashlib.sha256(new_password.encode()).hexdigest()
+    conn = get_conn()
+    conn.execute("UPDATE users SET password = ? WHERE id = ?", (pw_hash, int(user_id)))
+    conn.commit()
+    conn.close()
+
 
 def load_table(table_name: str) -> pd.DataFrame:
     conn = get_conn()

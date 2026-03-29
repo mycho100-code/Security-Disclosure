@@ -10,6 +10,7 @@ from db_helper import (
     init_db, load_table, insert_row, update_row,
     delete_rows, replace_all, truncate_table, bulk_update_classifications,
     reset_classifications,
+    verify_user, get_all_users, add_user, delete_user, reset_password,
 )
 from matching_engine import run_matching
 from ai_classifier import classify_batch
@@ -23,6 +24,88 @@ st.set_page_config(
     layout="wide",
 )
 init_db()
+
+# ────────────────────────────────────────
+# 로그인 처리
+# ────────────────────────────────────────
+# ★ 마스터 복구 키 (Admin 비밀번호 분실 시 초기화용)
+# 이 값을 변경하여 자체 복구 키를 설정하세요
+MASTER_RECOVERY_KEY = "SecureReset2024!"
+
+if "logged_in" not in st.session_state:
+    st.session_state["logged_in"] = False
+    st.session_state["user"] = None
+
+if not st.session_state["logged_in"]:
+    # 로그인 화면
+    st.markdown("""
+    <style>
+        .login-container { max-width:420px; margin:5rem auto; padding:2.5rem;
+                           background:white; border-radius:16px;
+                           box-shadow:0 4px 20px rgba(0,0,0,0.1); }
+        .login-title { text-align:center; font-size:1.8rem; font-weight:700;
+                       color:#1E3A5F; margin-bottom:0.3rem; }
+        .login-subtitle { text-align:center; font-size:0.95rem; color:#777;
+                          margin-bottom:2rem; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    col_l, col_c, col_r = st.columns([1, 2, 1])
+    with col_c:
+        st.markdown("")
+        st.markdown("")
+        st.markdown('<p class="login-title">🛡️ AI기반 정보보호공시 솔루션</p>', unsafe_allow_html=True)
+        st.markdown('<p class="login-subtitle">자산/비용 자동분류</p>', unsafe_allow_html=True)
+        st.markdown("---")
+
+        with st.form("login_form"):
+            username = st.text_input("사용자 ID", placeholder="ID를 입력하세요")
+            password = st.text_input("비밀번호", type="password", placeholder="비밀번호를 입력하세요")
+            submitted = st.form_submit_button("로그인", use_container_width=True, type="primary")
+
+            if submitted:
+                if not username or not password:
+                    st.error("ID와 비밀번호를 입력해 주세요.")
+                else:
+                    user = verify_user(username, password)
+                    if user:
+                        st.session_state["logged_in"] = True
+                        st.session_state["user"] = user
+                        st.rerun()
+                    else:
+                        st.error("❌ ID 또는 비밀번호가 일치하지 않습니다.")
+
+        st.caption("초기 관리자 계정: Admin / Admin")
+
+        # ── Admin 비밀번호 긴급 초기화 ──
+        with st.expander("🔐 관리자 비밀번호를 잊으셨나요?"):
+            st.caption("마스터 복구 키를 입력하면 Admin 비밀번호를 초기화할 수 있습니다.")
+            with st.form("recovery_form"):
+                recovery_key = st.text_input("마스터 복구 키", type="password", placeholder="복구 키를 입력하세요")
+                new_admin_pw = st.text_input("새 Admin 비밀번호", type="password", placeholder="변경할 비밀번호")
+                recover_btn = st.form_submit_button("🔑 비밀번호 초기화", use_container_width=True)
+
+                if recover_btn:
+                    if recovery_key == MASTER_RECOVERY_KEY:
+                        if new_admin_pw and len(new_admin_pw) >= 4:
+                            # Admin 계정 id 조회
+                            users = get_all_users()
+                            admin_row = users[users["username"] == "Admin"]
+                            if not admin_row.empty:
+                                reset_password(admin_row["id"].values[0], new_admin_pw)
+                                st.success("✅ Admin 비밀번호가 변경되었습니다. 새 비밀번호로 로그인하세요.")
+                            else:
+                                st.error("Admin 계정을 찾을 수 없습니다.")
+                        else:
+                            st.error("새 비밀번호는 4자 이상 입력해 주세요.")
+                    else:
+                        st.error("❌ 마스터 복구 키가 일치하지 않습니다.")
+
+    st.stop()  # 로그인 전에는 아래 코드 실행 안 함
+
+# ── 로그인된 사용자 정보 ──
+current_user = st.session_state["user"]
+is_admin = current_user["role"] == "admin"
 
 # ────────────────────────────────────────
 # 스타일
@@ -188,13 +271,30 @@ with st.sidebar:
     else:
         st.markdown('<p class="sidebar-title">🛡️ AI기반 정보보호공시 솔루션</p>', unsafe_allow_html=True)
 
-    st.markdown('<p class="sidebar-subtitle">자산/비용 자동분류</p>', unsafe_allow_html=True)
+    st.markdown('<p class="sidebar-subtitle">AI기반 정보보호공시 솔루션</p>', unsafe_allow_html=True)
+
+    # ── 사용자 정보 & 로그아웃 ──
+    user_display = current_user["name"] if current_user["name"] else current_user["username"]
+    role_badge = "👑 관리자" if is_admin else "👤 사용자"
+    st.markdown(f'<p style="text-align:center; color:#555; font-size:0.85rem; margin:0.3rem 0;">'
+                f'{role_badge} <b>{user_display}</b></p>', unsafe_allow_html=True)
+
+    if st.button("🚪 로그아웃", use_container_width=True, key="btn_logout"):
+        st.session_state["logged_in"] = False
+        st.session_state["user"] = None
+        st.rerun()
+
     st.markdown("---")
 
-    # ── 라디오 메뉴 (CSS로 책갈피 스타일 적용) ──
+    # ── 권한별 메뉴 구성 ──
+    if is_admin:
+        menu_items = ["🏠 대시보드", "📋 기준정보관리", "🔍 분석", "👥 사용자관리"]
+    else:
+        menu_items = ["🏠 대시보드", "🔍 분석"]
+
     menu = st.radio(
         "메뉴",
-        ["🏠 대시보드", "📋 기준정보관리", "🔍 분석"],
+        menu_items,
         index=0,
         label_visibility="collapsed",
     )
@@ -208,7 +308,7 @@ with st.sidebar:
     ai_model = st.selectbox("AI 모델", ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"], key="ai_model")
 
     st.markdown("---")
-    st.markdown("<small style='color:#999'>v3.0 · SQLite + Streamlit</small>", unsafe_allow_html=True)
+    st.markdown("<small style='color:#999'>v4.0 · SQLite + Streamlit</small>", unsafe_allow_html=True)
 
 # ═══════════════════════════════════════
 # 🏠 대시보드
@@ -811,3 +911,93 @@ elif menu == "🔍 분석":
 
     with tab_a_cost:
         render_analysis_tab("비용", "target_cost", "master_cost", COST_EXCEL_TO_DB, COST_DB_TO_EXCEL)
+
+
+# ═══════════════════════════════════════
+# 👥 사용자관리 (Admin 전용)
+# ═══════════════════════════════════════
+elif menu == "👥 사용자관리" and is_admin:
+    st.markdown('<p class="main-header">👥 사용자관리</p>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-header">시스템 사용자 계정을 관리합니다. (관리자 전용)</p>', unsafe_allow_html=True)
+
+    # ── 사용자 목록 ──
+    st.markdown("#### 📋 등록된 사용자")
+    users_df = get_all_users()
+    if not users_df.empty:
+        display_users = users_df.copy()
+        display_users["role"] = display_users["role"].map({"admin": "👑 관리자", "user": "👤 사용자"})
+        display_users.columns = ["ID", "사용자 ID", "권한", "이름"]
+        st.dataframe(display_users, use_container_width=True, hide_index=True)
+        st.caption(f"총 {len(users_df)}명")
+    else:
+        st.warning("등록된 사용자가 없습니다.")
+
+    st.markdown("---")
+
+    # ── 사용자 추가 ──
+    st.markdown("#### ➕ 사용자 추가")
+    with st.form("add_user_form", clear_on_submit=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            new_username = st.text_input("사용자 ID *", placeholder="로그인 시 사용할 ID")
+            new_password = st.text_input("비밀번호 *", type="password", placeholder="초기 비밀번호")
+        with col2:
+            new_name = st.text_input("이름", placeholder="표시될 이름")
+            new_role = st.selectbox("권한", ["user", "admin"], format_func=lambda x: "👤 사용자" if x == "user" else "👑 관리자")
+
+        submitted = st.form_submit_button("➕ 사용자 추가", type="primary", use_container_width=True)
+        if submitted:
+            if not new_username or not new_password:
+                st.error("사용자 ID와 비밀번호는 필수입니다.")
+            elif len(new_password) < 4:
+                st.error("비밀번호는 4자 이상이어야 합니다.")
+            else:
+                if add_user(new_username, new_password, new_role, new_name):
+                    st.success(f"✅ 사용자 '{new_username}'이(가) 추가되었습니다.")
+                    st.rerun()
+                else:
+                    st.error(f"❌ '{new_username}'은(는) 이미 존재하는 ID입니다.")
+
+    st.markdown("---")
+
+    # ── 비밀번호 초기화 / 사용자 삭제 ──
+    if not users_df.empty:
+        st.markdown("#### ⚙️ 사용자 관리")
+
+        col_pw, col_del = st.columns(2)
+
+        with col_pw:
+            st.markdown("**🔑 비밀번호 초기화**")
+            reset_user_id = st.selectbox(
+                "대상 사용자",
+                users_df["id"].tolist(),
+                format_func=lambda x: f"{users_df[users_df['id']==x]['username'].values[0]} ({users_df[users_df['id']==x]['name'].values[0]})",
+                key="reset_pw_user"
+            )
+            new_pw = st.text_input("새 비밀번호", type="password", key="new_pw_input")
+            if st.button("🔑 비밀번호 변경", key="btn_reset_pw"):
+                if new_pw and len(new_pw) >= 4:
+                    reset_password(reset_user_id, new_pw)
+                    target_name = users_df[users_df["id"] == reset_user_id]["username"].values[0]
+                    st.success(f"✅ '{target_name}'의 비밀번호가 변경되었습니다.")
+                else:
+                    st.error("비밀번호는 4자 이상 입력해 주세요.")
+
+        with col_del:
+            st.markdown("**🗑️ 사용자 삭제**")
+            # Admin 계정은 삭제 목록에서 제외
+            non_admin = users_df[users_df["username"] != "Admin"]
+            if non_admin.empty:
+                st.info("삭제 가능한 사용자가 없습니다. (Admin은 삭제 불가)")
+            else:
+                del_user_id = st.selectbox(
+                    "삭제할 사용자",
+                    non_admin["id"].tolist(),
+                    format_func=lambda x: f"{non_admin[non_admin['id']==x]['username'].values[0]} ({non_admin[non_admin['id']==x]['name'].values[0]})",
+                    key="del_user_select"
+                )
+                if st.button("🗑️ 사용자 삭제", key="btn_del_user", type="primary"):
+                    target_name = non_admin[non_admin["id"] == del_user_id]["username"].values[0]
+                    delete_user(del_user_id)
+                    st.success(f"✅ '{target_name}'이(가) 삭제되었습니다.")
+                    st.rerun()
