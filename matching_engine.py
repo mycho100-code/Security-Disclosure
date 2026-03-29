@@ -1,6 +1,11 @@
 """
 Matching Engine - Description 기반 유사도 매칭 로직
 분류값: "O" = 해당, "" = 비해당
+
+매칭 순서:
+  1차: 완전일치 — 전처리 후 키가 100% 동일
+  2차: 포함매칭 — 기준정보 Description이 분석대상 안에 포함
+  3차: 유사매칭 — RapidFuzz token_sort_ratio 임계값 이상
 """
 import re
 import pandas as pd
@@ -26,7 +31,7 @@ def run_matching(target_df: pd.DataFrame, master_df: pd.DataFrame,
     target_df["_key"] = target_df["description"].apply(preprocess)
     master_df["_key"] = master_df["description"].apply(preprocess)
 
-    # 결과 컬럼 초기화 (★ 분류값도 초기화하여 이전 AI분류 결과 잔존 방지)
+    # 결과 컬럼 초기화 (이전 AI분류 결과 잔존 방지)
     target_df["exclude_yn"] = ""
     target_df["it_yn"] = ""
     target_df["sec_yn"] = ""
@@ -46,7 +51,7 @@ def run_matching(target_df: pd.DataFrame, master_df: pd.DataFrame,
                 "description": str(row.get("description", "")),
             }
 
-    # 마스터 리스트 (2차 fuzzy match)
+    # 마스터 리스트 (2차 포함매칭 + 3차 fuzzy match 공용)
     master_list = []
     for _, row in master_df.iterrows():
         master_list.append({
@@ -58,6 +63,7 @@ def run_matching(target_df: pd.DataFrame, master_df: pd.DataFrame,
         })
 
     exact_count = 0
+    contain_count = 0
     fuzzy_count = 0
     unmatched_count = 0
 
@@ -80,7 +86,35 @@ def run_matching(target_df: pd.DataFrame, master_df: pd.DataFrame,
             exact_count += 1
             continue
 
-        # ── 2차: 유사도 매칭 ──
+        # ── 2차: 포함 매칭 (기준정보 전체가 분석대상 안에 100% 포함) ──
+        # 기준정보 전처리 키 전체가 분석대상 안에 들어있어야 매칭
+        # 여러 기준정보가 포함되면 가장 긴(구체적인) 것을 우선 매칭
+        best_contain = None
+        best_contain_len = 0
+        for m in master_list:
+            mkey = m["key"]
+            if not mkey:
+                continue
+            # 기준정보 키 전체(100%)가 분석대상 키 안에 포함되어 있는지 확인
+            # 완전일치(tkey == mkey)는 1차에서 이미 처리되었으므로 여기서는 부분포함만
+            if mkey in tkey and mkey != tkey:
+                if len(mkey) > best_contain_len:
+                    best_contain_len = len(mkey)
+                    best_contain = m
+
+        if best_contain:
+            # 포함 비율: 기준정보 길이 / 분석대상 길이 × 100 (기준정보 자체는 100% 포함됨)
+            contain_ratio = round(best_contain_len / len(tkey) * 100, 1)
+            target_df.at[idx, "exclude_yn"] = best_contain["exclude_yn"]
+            target_df.at[idx, "it_yn"] = best_contain["it_yn"]
+            target_df.at[idx, "sec_yn"] = best_contain["sec_yn"]
+            target_df.at[idx, "match_type"] = "포함매칭"
+            target_df.at[idx, "match_score"] = contain_ratio
+            target_df.at[idx, "matched_desc"] = best_contain["description"]
+            contain_count += 1
+            continue
+
+        # ── 3차: 유사도 매칭 ──
         best_score = 0
         best_match = None
         for m in master_list:
@@ -109,6 +143,7 @@ def run_matching(target_df: pd.DataFrame, master_df: pd.DataFrame,
     stats = {
         "total": len(target_df),
         "exact": exact_count,
+        "contain": contain_count,
         "fuzzy": fuzzy_count,
         "unmatched": unmatched_count,
     }

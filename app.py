@@ -188,7 +188,7 @@ with st.sidebar:
     else:
         st.markdown('<p class="sidebar-title">🛡️ AI기반 정보보호공시 솔루션</p>', unsafe_allow_html=True)
 
-    st.markdown('<p class="sidebar-subtitle">AI기반 정보보호공시 솔루션</p>', unsafe_allow_html=True)
+    st.markdown('<p class="sidebar-subtitle">자산/비용 자동분류</p>', unsafe_allow_html=True)
     st.markdown("---")
 
     # ── 라디오 메뉴 (CSS로 책갈피 스타일 적용) ──
@@ -272,8 +272,9 @@ if menu == "🏠 대시보드":
 1. **기준정보관리** — 자산·비용 마스터 데이터 CRUD 및 엑셀 업로드  
 2. **분석** — 신규 데이터를 마스터 Description과 비교하여 자동 분류  
    - 1차: 전처리 후 **완전일치** 매칭  
-   - 2차: RapidFuzz **유사도 매칭** (임계값 이상)  
-   - 3차: 미매칭 건에 대해 **OpenAI AI 자동 분류** (정보기술/정보보호/제외 판단 + 신뢰도·판단근거 제공)  
+   - 2차: 기준정보 Description이 분석대상에 포함되면 **포함매칭**  
+   - 3차: RapidFuzz **유사도 매칭** (임계값 이상)  
+   - 4차: 미매칭 건에 대해 **OpenAI AI 자동 분류** (정보기술/정보보호/제외 판단 + 신뢰도·판단근거 제공)  
 3. **결과 다운로드** — 분류 완료 데이터를 엑셀로 다운로드 (매칭유형별 색상 구분)  
     """)
 
@@ -520,17 +521,19 @@ elif menu == "🔍 분석":
 
                 # 통계
                 st.markdown("#### 📊 매칭 결과 통계")
-                s1, s2, s3, s4 = st.columns(4)
+                s1, s2, s3, s4, s5 = st.columns(5)
                 with s1:
                     st.metric("전체 건수", f"{stats['total']:,}")
                 with s2:
                     st.metric("✅ 완전일치", f"{stats['exact']:,}")
                 with s3:
-                    st.metric("🔶 유사매칭", f"{stats['fuzzy']:,}")
+                    st.metric("🟢 포함매칭", f"{stats['contain']:,}")
                 with s4:
+                    st.metric("🔶 유사매칭", f"{stats['fuzzy']:,}")
+                with s5:
                     st.metric("❌ 미매칭", f"{stats['unmatched']:,}")
 
-                match_rate = ((stats['exact'] + stats['fuzzy']) / stats['total'] * 100) if stats['total'] > 0 else 0
+                match_rate = ((stats['exact'] + stats['contain'] + stats['fuzzy']) / stats['total'] * 100) if stats['total'] > 0 else 0
                 st.progress(match_rate / 100, text=f"매칭률: {match_rate:.1f}%")
 
                 # DB 업데이트
@@ -558,8 +561,8 @@ elif menu == "🔍 분석":
 
                 filter_type = st.multiselect(
                     "매칭 유형 필터",
-                    ["완전일치", "유사매칭", "AI분류", "미매칭"],
-                    default=["완전일치", "유사매칭", "AI분류", "미매칭"],
+                    ["완전일치", "포함매칭", "유사매칭", "AI분류", "미매칭"],
+                    default=["완전일치", "포함매칭", "유사매칭", "AI분류", "미매칭"],
                     key=f"filter_{tab_key}",
                 )
                 view_df = result_df[result_df["match_type"].isin(filter_type)].copy()
@@ -579,9 +582,10 @@ elif menu == "🔍 분석":
                 CLASS_BG = "#E8F5E9"
                 MATCH_BG = "#EDE7F6"
                 ROW_COLORS = {
-                    "유사매칭": {"class": "#FFF3CD", "match": "#FFF3CD"},
-                    "미매칭":  {"class": "#F8D7DA", "match": "#F8D7DA"},
-                    "AI분류":  {"class": "#D6E9FF", "match": "#D6E9FF"},
+                    "포함매칭": {"class": "#E0F2F1", "match": "#E0F2F1"},   # 연한 청록
+                    "유사매칭": {"class": "#FFF3CD", "match": "#FFF3CD"},   # 노란색
+                    "미매칭":  {"class": "#F8D7DA", "match": "#F8D7DA"},   # 빨간색
+                    "AI분류":  {"class": "#D6E9FF", "match": "#D6E9FF"},   # 파란색
                 }
 
                 def highlight_cells(row):
@@ -606,7 +610,7 @@ elif menu == "🔍 분석":
                 st.dataframe(styled, use_container_width=True, height=500)
                 st.caption(f"표시 건수: {len(view_df)}건  |  "
                           f"⬜ 원본데이터  🟩 분류결과(제외/정보기술/정보보호)  🟪 매칭정보")
-                st.caption(f"행 색상 — 🟢 완전일치  🟡 유사매칭  🔴 미매칭  🔵 AI분류")
+                st.caption(f"행 색상 — 🟢 완전일치  🩵 포함매칭  🟡 유사매칭  🔴 미매칭  🔵 AI분류")
 
                 st.markdown("---")
 
@@ -754,6 +758,7 @@ elif menu == "🔍 분석":
 
                     cell_class_bg = PatternFill(start_color="E8F5E9", end_color="E8F5E9", fill_type="solid")
                     cell_match_bg = PatternFill(start_color="EDE7F6", end_color="EDE7F6", fill_type="solid")
+                    contain_teal = PatternFill(start_color="E0F2F1", end_color="E0F2F1", fill_type="solid")
                     yellow = PatternFill(start_color="FFF3CD", end_color="FFF3CD", fill_type="solid")
                     red = PatternFill(start_color="F8D7DA", end_color="F8D7DA", fill_type="solid")
                     ai_blue = PatternFill(start_color="D6E9FF", end_color="D6E9FF", fill_type="solid")
@@ -766,7 +771,9 @@ elif menu == "🔍 분석":
 
                     for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
                         mt_val = row[match_col_idx - 1].value if match_col_idx else ""
-                        if mt_val == "유사매칭":
+                        if mt_val == "포함매칭":
+                            row_fill = contain_teal
+                        elif mt_val == "유사매칭":
                             row_fill = yellow
                         elif mt_val == "미매칭":
                             row_fill = red
