@@ -752,3 +752,50 @@ def _analyze_risks(stats, asset_df, cost_df, ratio):
                 risks.append([f"{label} AI 자동분류", f"{ai_c}건 (수동 검증 권장)", "AI 판단 결과 확인 필요"])
 
     return risks if risks else [["특이사항 없음", "-", "-"]]
+
+
+# ═══════════════════════════════════
+# 미리보기용 데이터 생성
+# ═══════════════════════════════════
+
+def compute_preview_data(asset_df: pd.DataFrame, cost_df: pd.DataFrame) -> dict:
+    """리포트 미리보기에 필요한 모든 데이터를 계산하여 반환"""
+    stats = _compute_stats(asset_df, cost_df)
+    it_total = stats["asset_it_total"] + stats["cost_it_total"]
+    sec_total = stats["asset_sec_total"] + stats["cost_sec_total"]
+    ratio = (sec_total / it_total * 100) if it_total > 0 else 0
+
+    # 자산 분류별
+    asset_by_class = []
+    if not asset_df.empty and "asset_class" in asset_df.columns:
+        asset_by_class = _group_by_class(asset_df, "asset_class", "depreciation")
+
+    # 비용 계정별
+    cost_by_acct = []
+    if not cost_df.empty and "account_name" in cost_df.columns:
+        cost_by_acct = _group_by_class(cost_df, "account_name", "amount")
+
+    # Top 10
+    top_assets = _get_top_items(asset_df, "depreciation", 10)
+    top_costs = _get_top_items(cost_df, "amount", 10)
+
+    # 매칭 통계
+    asset_match = _match_type_stats(asset_df)
+    cost_match = _match_type_stats(cost_df)
+
+    # 리스크
+    risks = _analyze_risks(stats, asset_df, cost_df, ratio)
+
+    return {
+        "stats": stats,
+        "it_total": it_total,
+        "sec_total": sec_total,
+        "ratio": ratio,
+        "asset_by_class": asset_by_class,
+        "cost_by_acct": cost_by_acct,
+        "top_assets": top_assets,
+        "top_costs": top_costs,
+        "asset_match": asset_match,
+        "cost_match": cost_match,
+        "risks": risks,
+    }

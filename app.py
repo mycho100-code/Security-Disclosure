@@ -15,7 +15,7 @@ from db_helper import (
 )
 from matching_engine import run_matching
 from ai_classifier import classify_batch
-from report_generator import generate_report
+from report_generator import generate_report, compute_preview_data
 from github_backup import is_configured as gh_configured, push_backup as gh_push, pull_backup as gh_pull
 
 # ────────────────────────────────────────
@@ -1024,65 +1024,205 @@ elif menu == "📊 리포트 산출":
     if not cost_df.empty and "match_type" in cost_df.columns:
         cost_analyzed = cost_df["match_type"].apply(lambda x: x != "" if isinstance(x, str) else False).any()
 
-    # 데이터 현황 표시
-    st.markdown("#### 📋 분석 데이터 현황")
+    # 데이터 현황
     col1, col2 = st.columns(2)
     with col1:
         if asset_analyzed:
-            it_cnt = (asset_df["it_yn"] == "O").sum()
-            sec_cnt = (asset_df["sec_yn"] == "O").sum()
-            exc_cnt = (asset_df["exclude_yn"] == "O").sum()
             st.success(f"🖥️ **자산 분석 완료** ({len(asset_df)}건)")
-            st.write(f"정보기술: {it_cnt}건 / 정보보호: {sec_cnt}건 / 제외: {exc_cnt}건")
         else:
-            st.warning("🖥️ 자산 분석 미완료 — 분석 메뉴에서 먼저 분석을 실행하세요.")
-
+            st.warning("🖥️ 자산 분석 미완료")
     with col2:
         if cost_analyzed:
-            it_cnt = (cost_df["it_yn"] == "O").sum()
-            sec_cnt = (cost_df["sec_yn"] == "O").sum()
-            exc_cnt = (cost_df["exclude_yn"] == "O").sum()
             st.success(f"💰 **비용 분석 완료** ({len(cost_df)}건)")
-            st.write(f"정보기술: {it_cnt}건 / 정보보호: {sec_cnt}건 / 제외: {exc_cnt}건")
         else:
-            st.warning("💰 비용 분석 미완료 — 분석 메뉴에서 먼저 분석을 실행하세요.")
-
-    st.markdown("---")
+            st.warning("💰 비용 분석 미완료")
 
     if not asset_analyzed and not cost_analyzed:
-        st.error("⚠️ 자산 또는 비용 중 최소 하나의 분석이 완료되어야 리포트를 생성할 수 있습니다.")
+        st.error("⚠️ 자산 또는 비용 중 최소 하나의 분석이 완료되어야 합니다.")
     else:
-        st.markdown("#### 📄 리포트 구성")
-        st.markdown("""
-        리포트에 포함되는 내용:
-        1. **Executive Summary** — 총 IT 투자 / 정보보호 투자 요약, 핵심 지표
-        2. **투자 현황 Overview** — 자산·비용별 IT/보안/제외 투자 현황
-        3. **세부 분류별 Breakdown** — 자산분류별·계정별 상세 내역
-        4. **주요 투자 항목 Top 10** — 금액 기준 상위 항목
-        5. **분류 기준 및 판단 로직** — KISA 가이드라인 기준, 자동 분류 로직 설명 (Audit 대응)
-        6. **회계 정합성 및 산출 방법** — 데이터 출처, 산출 기준
-        7. **매칭 결과 통계** — 완전일치/포함/유사/AI/미매칭 통계
-        8. **리스크 및 개선사항** — 보안 투자 비율, 미분류 항목 등
-        """)
-
         st.markdown("---")
 
-        if st.button("📊 리포트 생성 및 다운로드", type="primary", use_container_width=True):
-            with st.spinner("리포트 생성 중... KISA 가이드라인 기반 분석 리포트를 작성합니다."):
-                report_buffer = generate_report(
-                    asset_df if asset_analyzed else pd.DataFrame(),
-                    cost_df if cost_analyzed else pd.DataFrame(),
-                )
-
+        # 리포트 생성 버튼
+        if st.button("📊 리포트 생성", type="primary", use_container_width=True):
+            with st.spinner("리포트 생성 중..."):
+                a_df = asset_df if asset_analyzed else pd.DataFrame()
+                c_df = cost_df if cost_analyzed else pd.DataFrame()
+                st.session_state["report_buffer"] = generate_report(a_df, c_df)
+                st.session_state["report_preview"] = compute_preview_data(a_df, c_df)
             st.success("✅ 리포트가 생성되었습니다!")
+            st.rerun()
 
+        # 미리보기 & 다운로드 (생성 후)
+        if "report_preview" in st.session_state and st.session_state.get("report_buffer"):
+            pv = st.session_state["report_preview"]
+            stats = pv["stats"]
+
+            # ── 다운로드 버튼 (상단 고정) ──
             st.download_button(
-                label="📥 리포트 다운로드 (Word)",
-                data=report_buffer,
+                label="📥 Word 리포트 다운로드 (.docx)",
+                data=st.session_state["report_buffer"],
                 file_name="정보보호공시_분석리포트.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 type="primary",
                 use_container_width=True,
+            )
+
+            st.markdown("---")
+            st.markdown("### 📋 리포트 미리보기")
+
+            # ── ① Executive Summary ──
+            st.markdown("#### 01. Executive Summary")
+
+            m1, m2, m3 = st.columns(3)
+            with m1:
+                st.metric("정보기술(IT) 총 투자", f"{pv['it_total']:,.0f}원")
+            with m2:
+                st.metric("정보보호 총 투자", f"{pv['sec_total']:,.0f}원")
+            with m3:
+                delta_color = "normal" if pv['ratio'] >= 5 else "inverse"
+                st.metric("정보보호/IT 비율", f"{pv['ratio']:.1f}%",
+                          delta="양호" if pv['ratio'] >= 10 else ("보통" if pv['ratio'] >= 5 else "미흡"),
+                          delta_color=delta_color)
+
+            sum_data = {
+                "구분": ["IT 투자 (자산)", "IT 투자 (비용)", "정보보호 (자산)", "정보보호 (비용)",
+                         "제외 (자산)", "제외 (비용)"],
+                "금액": [f"{stats['asset_it_total']:,.0f}", f"{stats['cost_it_total']:,.0f}",
+                         f"{stats['asset_sec_total']:,.0f}", f"{stats['cost_sec_total']:,.0f}",
+                         f"{stats['asset_exc_total']:,.0f}", f"{stats['cost_exc_total']:,.0f}"],
+                "건수": [f"{stats['asset_it_cnt']}건", f"{stats['cost_it_cnt']}건",
+                         f"{stats['asset_sec_cnt']}건", f"{stats['cost_sec_cnt']}건",
+                         f"{stats['asset_exc_cnt']}건", f"{stats['cost_exc_cnt']}건"],
+            }
+            st.dataframe(pd.DataFrame(sum_data), use_container_width=True, hide_index=True)
+
+            st.markdown("---")
+
+            # ── ② 투자 현황 Overview ──
+            st.markdown("#### 02. 투자 현황 Overview")
+            overview_data = {
+                "구분": ["정보기술(IT) 총 투자", "  └ 정보보호 투자", "제외"],
+                "자산(감가상각비)": [f"{stats['asset_it_total']:,.0f}",
+                                    f"{stats['asset_sec_total']:,.0f}",
+                                    f"{stats['asset_exc_total']:,.0f}"],
+                "비용(발생액)": [f"{stats['cost_it_total']:,.0f}",
+                                f"{stats['cost_sec_total']:,.0f}",
+                                f"{stats['cost_exc_total']:,.0f}"],
+                "합계": [f"{pv['it_total']:,.0f}",
+                         f"{pv['sec_total']:,.0f}",
+                         f"{stats['asset_exc_total'] + stats['cost_exc_total']:,.0f}"],
+                "비중": ["100%", f"{pv['ratio']:.1f}%", "-"],
+            }
+            st.dataframe(pd.DataFrame(overview_data), use_container_width=True, hide_index=True)
+
+            # 비율 평가
+            if pv['ratio'] >= 10:
+                st.success(f"✅ 정보보호 투자 비율 **{pv['ratio']:.1f}%** — 양호 (업계 권장 5~15%)")
+            elif pv['ratio'] >= 5:
+                st.warning(f"⚠️ 정보보호 투자 비율 **{pv['ratio']:.1f}%** — 보통 (강화 검토)")
+            else:
+                st.error(f"🔴 정보보호 투자 비율 **{pv['ratio']:.1f}%** — 미흡 (예산 확대 필요)")
+
+            st.markdown("---")
+
+            # ── ③ 세부 분류별 Breakdown ──
+            st.markdown("#### 03. 세부 분류별 투자 Breakdown")
+
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.markdown("**🖥️ 자산 분류별**")
+                if pv["asset_by_class"]:
+                    df_ac = pd.DataFrame(pv["asset_by_class"],
+                                         columns=["자산분류", "건수", "감가상각비", "IT", "보안"])
+                    st.dataframe(df_ac, use_container_width=True, hide_index=True)
+                else:
+                    st.caption("데이터 없음")
+            with col_b:
+                st.markdown("**💰 비용 계정별**")
+                if pv["cost_by_acct"]:
+                    df_ca = pd.DataFrame(pv["cost_by_acct"],
+                                         columns=["계정명", "건수", "금액", "IT", "보안"])
+                    st.dataframe(df_ca, use_container_width=True, hide_index=True)
+                else:
+                    st.caption("데이터 없음")
+
+            st.markdown("---")
+
+            # ── ④ 주요 투자 항목 Top 10 ──
+            st.markdown("#### 04. 주요 투자 항목 (Top 10)")
+
+            tab_top_a, tab_top_c = st.tabs(["🖥️ 자산 Top 10", "💰 비용 Top 10"])
+            with tab_top_a:
+                if pv["top_assets"]:
+                    df_ta = pd.DataFrame(pv["top_assets"],
+                                         columns=["Description", "감가상각비", "분류", "매칭유형"])
+                    st.dataframe(df_ta, use_container_width=True, hide_index=True)
+                else:
+                    st.caption("데이터 없음")
+            with tab_top_c:
+                if pv["top_costs"]:
+                    df_tc = pd.DataFrame(pv["top_costs"],
+                                         columns=["Description", "금액", "분류", "매칭유형"])
+                    st.dataframe(df_tc, use_container_width=True, hide_index=True)
+                else:
+                    st.caption("데이터 없음")
+
+            st.markdown("---")
+
+            # ── ⑤ 분류 기준 ──
+            st.markdown("#### 05. 분류 기준 및 판단 로직")
+            st.info("📌 KISA 「정보보호 공시 가이드라인(2024.03)」 자산분류표(p.72~77) 기준")
+
+            logic_data = {
+                "단계": ["1차", "2차", "3차", "4차"],
+                "방식": ["완전일치", "포함매칭", "유사매칭", "AI 분류"],
+                "설명": ["기준정보 Description과 100% 동일",
+                         "기준정보 전체가 분석대상에 포함",
+                         "RapidFuzz 유사도 85% 이상",
+                         "OpenAI + KISA 가이드라인 기준"],
+            }
+            st.dataframe(pd.DataFrame(logic_data), use_container_width=True, hide_index=True)
+
+            st.markdown("---")
+
+            # ── ⑦ 매칭 결과 통계 ──
+            st.markdown("#### 07. 매칭 결과 통계")
+
+            col_ms1, col_ms2 = st.columns(2)
+            with col_ms1:
+                st.markdown("**🖥️ 자산**")
+                if pv["asset_match"]:
+                    df_am = pd.DataFrame(pv["asset_match"], columns=["매칭유형", "건수", "비율"])
+                    st.dataframe(df_am, use_container_width=True, hide_index=True)
+                else:
+                    st.caption("데이터 없음")
+            with col_ms2:
+                st.markdown("**💰 비용**")
+                if pv["cost_match"]:
+                    df_cm = pd.DataFrame(pv["cost_match"], columns=["매칭유형", "건수", "비율"])
+                    st.dataframe(df_cm, use_container_width=True, hide_index=True)
+                else:
+                    st.caption("데이터 없음")
+
+            st.markdown("---")
+
+            # ── ⑧ 리스크 ──
+            st.markdown("#### 08. 리스크 및 개선사항")
+            if pv["risks"]:
+                df_risk = pd.DataFrame(pv["risks"], columns=["항목", "현황", "개선방안"])
+                st.dataframe(df_risk, use_container_width=True, hide_index=True)
+
+            st.markdown("---")
+
+            # ── 하단 다운로드 버튼 ──
+            st.download_button(
+                label="📥 Word 리포트 다운로드 (.docx)",
+                data=st.session_state["report_buffer"],
+                file_name="정보보호공시_분석리포트.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                type="primary",
+                use_container_width=True,
+                key="btn_dl_report_bottom",
             )
 
 
