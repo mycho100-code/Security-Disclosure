@@ -264,3 +264,108 @@ def reset_classifications(table_name: str):
     """)
     conn.commit()
     conn.close()
+
+
+# ═══════════════════════════════════
+# 백업 / 복원
+# ═══════════════════════════════════
+
+def export_backup() -> bytes:
+    """전체 DB를 JSON으로 백업. 반환: JSON bytes"""
+    import json
+    conn = get_conn()
+    tables = ["master_asset", "master_cost", "target_asset", "target_cost", "users"]
+    backup = {}
+    for t in tables:
+        try:
+            df = pd.read_sql(f"SELECT * FROM {t}", conn)
+            backup[t] = df.to_dict(orient="records")
+        except:
+            backup[t] = []
+    conn.close()
+    backup["_meta"] = {
+        "version": "4.0",
+        "exported_at": pd.Timestamp.now().isoformat(),
+        "tables": list(backup.keys()),
+    }
+    return json.dumps(backup, ensure_ascii=False, default=str).encode("utf-8")
+
+
+def import_backup(data: bytes) -> dict:
+    """JSON 백업 파일에서 전체 DB 복원. 반환: {테이블명: 건수} 딕셔너리"""
+    import json
+    backup = json.loads(data.decode("utf-8"))
+    result = {}
+
+    conn = get_conn()
+
+    table_map = {
+        "master_asset": ["asset_number","description","cost_center","serial_number",
+                         "cost_center2","asset_class","depreciation","exclude_yn","it_yn","sec_yn"],
+        "master_cost": ["gl_date","profit_center","cost_center","account","account_name",
+                        "business_area","doc_type","description","amount","exclude_yn","it_yn","sec_yn"],
+        "target_asset": ["asset_number","description","cost_center","serial_number",
+                         "cost_center2","asset_class","depreciation","exclude_yn","it_yn","sec_yn",
+                         "match_type","match_score","matched_desc"],
+        "target_cost": ["gl_date","profit_center","cost_center","account","account_name",
+                        "business_area","doc_type","description","amount","exclude_yn","it_yn","sec_yn",
+                        "match_type","match_score","matched_desc"],
+    }
+
+    for table_name, cols in table_map.items():
+        if table_name in backup and backup[table_name]:
+            conn.execute(f"DELETE FROM {table_name}")
+            df = pd.DataFrame(backup[table_name])
+            # DB 컬럼만 추출 (id 제외)
+            valid_cols = [c for c in cols if c in df.columns]
+            if valid_cols:
+                df[valid_cols].to_sql(table_name, conn, if_exists="append", index=False)
+                result[table_name] = len(df)
+            else:
+                result[table_name] = 0
+        else:
+            result[table_name] = 0
+
+    # 사용자 복원 (기존 Admin 유지하면서 추가 사용자 복원)
+    if "users" in backup and backup["users"]:
+        import hashlib
+        for user in backup["users"]:
+            username = user.get("username", "")
+            if username == "Admin":
+                # Admin은 비밀번호만 업데이트
+                if "password" in user and user["password"]:
+                    conn.execute("UPDATE users SET password = ?, name = ? WHERE username = 'Admin'",
+                                 (user["password"], user.get("name", "관리자")))
+            else:
+                # 다른 사용자는 없으면 추가
+                try:
+                    conn.execute(
+                        "INSERT INTO users (username, password, role, name) VALUES (?, ?, ?, ?)",
+                        (username, user.get("password", ""), user.get("role", "user"), user.get("name", ""))
+                    )
+                except:
+                    pass  # 이미 존재하면 무시
+        result["users"] = len(backup["users"])
+
+    conn.commit()
+    conn.close()
+    return result
+
+
+def is_db_empty() -> bool:
+    """DB가 비어있는지 확인 (Sleep 후 깨어남 감지용)"""
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM master_asset")
+        master_a = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM master_cost")
+        master_c = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM users WHERE username != 'Admin'")
+        extra_users = cur.fetchone()[0]
+        conn.close()
+        # 마스터 데이터 없고 추가 사용자도 없으면 = 초기화된 상태
+        return master_a == 0 and master_c == 0 and extra_users == 0
+    except:
+        conn.close()
+        return True

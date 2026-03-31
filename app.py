@@ -11,9 +11,12 @@ from db_helper import (
     delete_rows, replace_all, truncate_table, bulk_update_classifications,
     reset_classifications,
     verify_user, get_all_users, add_user, delete_user, reset_password,
+    export_backup, import_backup, is_db_empty,
 )
 from matching_engine import run_matching
 from ai_classifier import classify_batch
+from report_generator import generate_report
+from github_backup import is_configured as gh_configured, push_backup as gh_push, pull_backup as gh_pull
 
 # ────────────────────────────────────────
 # 페이지 설정
@@ -24,6 +27,15 @@ st.set_page_config(
     layout="wide",
 )
 init_db()
+
+
+def _auto_backup_to_github():
+    """주요 작업 후 GitHub에 자동 백업 (설정된 경우에만)"""
+    if gh_configured():
+        try:
+            gh_push(export_backup())
+        except:
+            pass  # 실패해도 사용자 작업을 방해하지 않음
 
 # ────────────────────────────────────────
 # 로그인 처리
@@ -106,6 +118,65 @@ if not st.session_state["logged_in"]:
 # ── 로그인된 사용자 정보 ──
 current_user = st.session_state["user"]
 is_admin = current_user["role"] == "admin"
+
+# ── Sleep 후 깨어남 감지 & 자동 복원 ──
+if "sleep_checked" not in st.session_state:
+    st.session_state["sleep_checked"] = True
+    st.session_state["need_restore"] = False
+
+    if is_db_empty():
+        # GitHub 백업이 설정되어 있으면 자동 복원 시도
+        if gh_configured():
+            with st.spinner("🔄 GitHub에서 백업 데이터를 복원하는 중..."):
+                pull_result = gh_pull()
+            if pull_result["success"] and pull_result["data"]:
+                try:
+                    result = import_backup(pull_result["data"])
+                    total = sum(result.values())
+                    if total > 0:
+                        st.success(f"✅ GitHub 백업에서 자동 복원 완료! ({total}건)")
+                        st.session_state["need_restore"] = False
+                    else:
+                        st.session_state["need_restore"] = True
+                except:
+                    st.session_state["need_restore"] = True
+            else:
+                st.session_state["need_restore"] = True
+        else:
+            st.session_state["need_restore"] = True
+
+if st.session_state.get("need_restore", False):
+    st.warning("⚠️ **앱이 초기화되었습니다** (Streamlit Cloud Sleep 후 재시작)")
+
+    if gh_configured():
+        st.info("GitHub 백업에 데이터가 없거나 복원에 실패했습니다. 수동 백업 파일로 복원하세요.")
+    else:
+        st.info("💡 **자동 복원을 설정하려면**: Streamlit Cloud → Settings → Secrets에 "
+                "GITHUB_TOKEN과 GITHUB_REPO를 추가하세요. (아래 가이드 참조)")
+
+    restore_file = st.file_uploader(
+        "📦 수동 백업 파일 업로드 (.json)", type=["json"], key="restore_upload"
+    )
+    col_r1, col_r2 = st.columns([1, 1])
+    with col_r1:
+        if restore_file and st.button("🔄 데이터 복원", type="primary", key="btn_restore"):
+            try:
+                result = import_backup(restore_file.read())
+                total = sum(result.values())
+                detail = " / ".join([f"{k}: {v}건" for k, v in result.items() if v > 0])
+                st.success(f"✅ 복원 완료! 총 {total}건 ({detail})")
+                st.session_state["need_restore"] = False
+                # GitHub에도 백업 저장
+                if gh_configured():
+                    gh_push(export_backup())
+                st.rerun()
+            except Exception as e:
+                st.error(f"복원 실패: {e}")
+    with col_r2:
+        if st.button("✖️ 닫기 (새로 시작)", key="btn_dismiss_restore"):
+            st.session_state["need_restore"] = False
+            st.rerun()
+    st.markdown("---")
 
 # ────────────────────────────────────────
 # 스타일
@@ -288,9 +359,9 @@ with st.sidebar:
 
     # ── 권한별 메뉴 구성 ──
     if is_admin:
-        menu_items = ["🏠 대시보드", "📋 기준정보관리", "🔍 분석", "👥 사용자관리"]
+        menu_items = ["🏠 대시보드", "📋 기준정보관리", "🔍 분석", "📊 리포트 산출", "👥 사용자관리"]
     else:
-        menu_items = ["🏠 대시보드", "🔍 분석"]
+        menu_items = ["🏠 대시보드", "🔍 분석", "📊 리포트 산출"]
 
     menu = st.radio(
         "메뉴",
@@ -307,8 +378,23 @@ with st.sidebar:
                             help="미매칭 건 AI 검토에 사용됩니다")
     ai_model = st.selectbox("AI 모델", ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"], key="ai_model")
 
+    # ── 데이터 백업 (Admin) ──
+    if is_admin:
+        st.markdown("---")
+        st.markdown("#### 💾 데이터 백업")
+        backup_data = export_backup()
+        st.download_button(
+            label="📦 백업 다운로드",
+            data=backup_data,
+            file_name=f"backup_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.json",
+            mime="application/json",
+            use_container_width=True,
+            key="btn_backup_dl",
+            help="기준정보, 분석결과, 사용자 계정 전체를 백업합니다. Sleep 복원용으로 보관하세요.",
+        )
+
     st.markdown("---")
-    st.markdown("<small style='color:#999'>v4.0 · SQLite + Streamlit</small>", unsafe_allow_html=True)
+    st.markdown("<small style='color:#999'>v4.1 · SQLite + Streamlit</small>", unsafe_allow_html=True)
 
 # ═══════════════════════════════════════
 # 🏠 대시보드
@@ -374,7 +460,9 @@ if menu == "🏠 대시보드":
    - 1차: 전처리 후 **완전일치** 매칭  
    - 2차: 기준정보 Description이 분석대상에 포함되면 **포함매칭**  
    - 3차: RapidFuzz **유사도 매칭** (임계값 이상)  
-   - 4차: 미매칭 건에 대해 **OpenAI AI 자동 분류** (정보기술/정보보호/제외 판단 + 신뢰도·판단근거 제공)  
+   - 4차: 미매칭 건에 대해 **OpenAI AI 자동 분류**  
+     · [KISA 정보보호 공시 가이드라인(2024)](https://isds.kisa.or.kr/kr/bbs/view.do?bbsId=B0000011&menuNo=204948&nttId=38) 자산분류표 기준 적용  
+     · 정보기술/정보보호/제외 판단 + 신뢰도·판단근거 제공  
 3. **결과 다운로드** — 분류 완료 데이터를 엑셀로 다운로드 (매칭유형별 색상 구분)  
     """)
 
@@ -415,6 +503,7 @@ elif menu == "📋 기준정보관리":
 
                     if st.button(f"✅ {tab_key} 데이터 전체 대체", key=f"replace_{tab_key}"):
                         replace_all(table_name, df_db)
+                        _auto_backup_to_github()
                         st.success(f"✅ {len(df_db)}건이 업로드되었습니다.")
                         st.rerun()
             except Exception as e:
@@ -649,6 +738,7 @@ elif menu == "🔍 분석":
                         "matched_desc": row.get("matched_desc", ""),
                     })
                 bulk_update_classifications(target_table, updates)
+                _auto_backup_to_github()
                 st.success("✅ 분석 완료! 결과가 저장되었습니다.")
                 st.rerun()
 
@@ -721,7 +811,7 @@ elif menu == "🔍 분석":
 
                 if not unmatched_df.empty:
                     st.markdown("### Step 2-1. 🤖 AI 검토 (미매칭 건)")
-                    st.caption(f"미매칭 {len(unmatched_df)}건에 대해 OpenAI API로 자동 분류를 시도합니다.")
+                    st.caption(f"미매칭 {len(unmatched_df)}건에 대해 KISA 정보보호 공시 가이드라인 기준으로 OpenAI AI 분류를 시도합니다.")
 
                     with st.expander(f"미매칭 {len(unmatched_df)}건 미리보기", expanded=False):
                         unmatched_display = unmatched_df[["id", "description"]].copy()
@@ -787,6 +877,7 @@ elif menu == "🔍 분석":
 
                             if ai_updates:
                                 bulk_update_classifications(target_table, ai_updates)
+                                _auto_backup_to_github()
                                 st.success(f"✅ AI 검토 완료! {len(ai_updates)}건이 분류되었습니다.")
 
                                 ai_result_data = []
@@ -914,6 +1005,88 @@ elif menu == "🔍 분석":
 
 
 # ═══════════════════════════════════════
+# 📊 리포트 산출
+# ═══════════════════════════════════════
+elif menu == "📊 리포트 산출":
+    st.markdown('<p class="main-header">📊 정보보호공시 리포트 산출</p>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-header">KISA 정보보호 공시 가이드라인(2024.03) 기반 분석 리포트를 생성합니다.</p>',
+                unsafe_allow_html=True)
+
+    # 분석 데이터 확인
+    asset_df = load_table("target_asset")
+    cost_df = load_table("target_cost")
+
+    asset_analyzed = False
+    cost_analyzed = False
+
+    if not asset_df.empty and "match_type" in asset_df.columns:
+        asset_analyzed = asset_df["match_type"].apply(lambda x: x != "" if isinstance(x, str) else False).any()
+    if not cost_df.empty and "match_type" in cost_df.columns:
+        cost_analyzed = cost_df["match_type"].apply(lambda x: x != "" if isinstance(x, str) else False).any()
+
+    # 데이터 현황 표시
+    st.markdown("#### 📋 분석 데이터 현황")
+    col1, col2 = st.columns(2)
+    with col1:
+        if asset_analyzed:
+            it_cnt = (asset_df["it_yn"] == "O").sum()
+            sec_cnt = (asset_df["sec_yn"] == "O").sum()
+            exc_cnt = (asset_df["exclude_yn"] == "O").sum()
+            st.success(f"🖥️ **자산 분석 완료** ({len(asset_df)}건)")
+            st.write(f"정보기술: {it_cnt}건 / 정보보호: {sec_cnt}건 / 제외: {exc_cnt}건")
+        else:
+            st.warning("🖥️ 자산 분석 미완료 — 분석 메뉴에서 먼저 분석을 실행하세요.")
+
+    with col2:
+        if cost_analyzed:
+            it_cnt = (cost_df["it_yn"] == "O").sum()
+            sec_cnt = (cost_df["sec_yn"] == "O").sum()
+            exc_cnt = (cost_df["exclude_yn"] == "O").sum()
+            st.success(f"💰 **비용 분석 완료** ({len(cost_df)}건)")
+            st.write(f"정보기술: {it_cnt}건 / 정보보호: {sec_cnt}건 / 제외: {exc_cnt}건")
+        else:
+            st.warning("💰 비용 분석 미완료 — 분석 메뉴에서 먼저 분석을 실행하세요.")
+
+    st.markdown("---")
+
+    if not asset_analyzed and not cost_analyzed:
+        st.error("⚠️ 자산 또는 비용 중 최소 하나의 분석이 완료되어야 리포트를 생성할 수 있습니다.")
+    else:
+        st.markdown("#### 📄 리포트 구성")
+        st.markdown("""
+        리포트에 포함되는 내용:
+        1. **Executive Summary** — 총 IT 투자 / 정보보호 투자 요약, 핵심 지표
+        2. **투자 현황 Overview** — 자산·비용별 IT/보안/제외 투자 현황
+        3. **세부 분류별 Breakdown** — 자산분류별·계정별 상세 내역
+        4. **주요 투자 항목 Top 10** — 금액 기준 상위 항목
+        5. **분류 기준 및 판단 로직** — KISA 가이드라인 기준, 자동 분류 로직 설명 (Audit 대응)
+        6. **회계 정합성 및 산출 방법** — 데이터 출처, 산출 기준
+        7. **매칭 결과 통계** — 완전일치/포함/유사/AI/미매칭 통계
+        8. **리스크 및 개선사항** — 보안 투자 비율, 미분류 항목 등
+        """)
+
+        st.markdown("---")
+
+        if st.button("📊 리포트 생성 및 다운로드", type="primary", use_container_width=True):
+            with st.spinner("리포트 생성 중... KISA 가이드라인 기반 분석 리포트를 작성합니다."):
+                report_buffer = generate_report(
+                    asset_df if asset_analyzed else pd.DataFrame(),
+                    cost_df if cost_analyzed else pd.DataFrame(),
+                )
+
+            st.success("✅ 리포트가 생성되었습니다!")
+
+            st.download_button(
+                label="📥 리포트 다운로드 (Word)",
+                data=report_buffer,
+                file_name="정보보호공시_분석리포트.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                type="primary",
+                use_container_width=True,
+            )
+
+
+# ═══════════════════════════════════════
 # 👥 사용자관리 (Admin 전용)
 # ═══════════════════════════════════════
 elif menu == "👥 사용자관리" and is_admin:
@@ -953,6 +1126,7 @@ elif menu == "👥 사용자관리" and is_admin:
                 st.error("비밀번호는 4자 이상이어야 합니다.")
             else:
                 if add_user(new_username, new_password, new_role, new_name):
+                    _auto_backup_to_github()
                     st.success(f"✅ 사용자 '{new_username}'이(가) 추가되었습니다.")
                     st.rerun()
                 else:
@@ -979,6 +1153,7 @@ elif menu == "👥 사용자관리" and is_admin:
                 if new_pw and len(new_pw) >= 4:
                     reset_password(reset_user_id, new_pw)
                     target_name = users_df[users_df["id"] == reset_user_id]["username"].values[0]
+                    _auto_backup_to_github()
                     st.success(f"✅ '{target_name}'의 비밀번호가 변경되었습니다.")
                 else:
                     st.error("비밀번호는 4자 이상 입력해 주세요.")
@@ -999,5 +1174,6 @@ elif menu == "👥 사용자관리" and is_admin:
                 if st.button("🗑️ 사용자 삭제", key="btn_del_user", type="primary"):
                     target_name = non_admin[non_admin["id"] == del_user_id]["username"].values[0]
                     delete_user(del_user_id)
+                    _auto_backup_to_github()
                     st.success(f"✅ '{target_name}'이(가) 삭제되었습니다.")
                     st.rerun()
