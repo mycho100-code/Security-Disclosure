@@ -152,7 +152,41 @@ if st.session_state.get("need_restore", False):
         st.info("GitHub 백업에 데이터가 없거나 복원에 실패했습니다. 수동 백업 파일로 복원하세요.")
     else:
         st.info("💡 **자동 복원을 설정하려면**: Streamlit Cloud → Settings → Secrets에 "
-                "GITHUB_TOKEN과 GITHUB_REPO를 추가하세요. (아래 가이드 참조)")
+                "GITHUB_TOKEN과 GITHUB_REPO를 추가하세요.")
+
+    # GitHub 설정 진단
+    with st.expander("🔧 GitHub 자동 백업 설정 상태 확인"):
+        _gh_ok = gh_configured()
+        if _gh_ok:
+            st.success("✅ GitHub 연결 설정 확인됨")
+            # 백업 파일 존재 여부 확인
+            _test = gh_pull()
+            if _test["success"]:
+                st.success(f"✅ GitHub 백업 파일 존재 — {_test['message']}")
+                if st.button("🔄 GitHub에서 다시 복원 시도", key="btn_retry_gh"):
+                    try:
+                        result = import_backup(_test["data"])
+                        total = sum(result.values())
+                        st.success(f"✅ 복원 완료! ({total}건)")
+                        st.session_state["need_restore"] = False
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"복원 실패: {e}")
+            else:
+                st.warning(f"⚠️ {_test['message']}")
+        else:
+            st.error("❌ GitHub 설정이 감지되지 않습니다.")
+            st.markdown("""
+**설정 방법:**
+1. GitHub → Settings → Developer settings → Personal access tokens → **Tokens (classic)** → Generate new token
+   - Scope: **repo** 전체 체크 → 토큰 복사
+2. Streamlit Cloud → 앱 선택 → **Settings** → **Secrets** 탭에 아래 내용 입력:
+```
+GITHUB_TOKEN = "ghp_여기에토큰붙여넣기"
+GITHUB_REPO = "본인계정/저장소명"
+```
+3. **Save** 클릭 후 앱이 자동 재시작됩니다.
+            """)
 
     restore_file = st.file_uploader(
         "📦 수동 백업 파일 업로드 (.json)", type=["json"], key="restore_upload"
@@ -166,7 +200,6 @@ if st.session_state.get("need_restore", False):
                 detail = " / ".join([f"{k}: {v}건" for k, v in result.items() if v > 0])
                 st.success(f"✅ 복원 완료! 총 {total}건 ({detail})")
                 st.session_state["need_restore"] = False
-                # GitHub에도 백업 저장
                 if gh_configured():
                     gh_push(export_backup())
                 st.rerun()

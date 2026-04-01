@@ -13,10 +13,19 @@ def _get_config():
     """Streamlit secrets에서 GitHub 설정 읽기"""
     try:
         import streamlit as st
-        token = st.secrets.get("GITHUB_TOKEN", "")
-        repo = st.secrets.get("GITHUB_REPO", "")  # "owner/repo-name" 형식
-        return token, repo
-    except:
+        # st.secrets는 딕셔너리 접근만 지원하는 버전이 있음
+        token = ""
+        repo = ""
+        try:
+            token = st.secrets["GITHUB_TOKEN"]
+        except (KeyError, FileNotFoundError):
+            pass
+        try:
+            repo = st.secrets["GITHUB_REPO"]
+        except (KeyError, FileNotFoundError):
+            pass
+        return str(token).strip(), str(repo).strip()
+    except Exception:
         return "", ""
 
 
@@ -34,6 +43,20 @@ def is_configured() -> bool:
     return bool(token) and bool(repo)
 
 
+def _get_default_branch(token, repo):
+    """저장소의 기본 브랜치명 확인 (main 또는 master 등)"""
+    try:
+        resp = requests.get(
+            f"https://api.github.com/repos/{repo}",
+            headers=_headers(token), timeout=10
+        )
+        if resp.status_code == 200:
+            return resp.json().get("default_branch", "main")
+    except:
+        pass
+    return "main"
+
+
 def push_backup(backup_bytes: bytes) -> dict:
     """
     GitHub 저장소에 백업 파일 push (생성 또는 업데이트).
@@ -41,15 +64,16 @@ def push_backup(backup_bytes: bytes) -> dict:
     """
     token, repo = _get_config()
     if not token or not repo:
-        return {"success": False, "message": "GitHub 설정이 없습니다. secrets에 GITHUB_TOKEN, GITHUB_REPO를 설정하세요."}
+        return {"success": False, "message": "GitHub 설정이 없습니다."}
 
+    branch = _get_default_branch(token, repo)
     url = f"https://api.github.com/repos/{repo}/contents/{BACKUP_PATH}"
     headers = _headers(token)
 
     # 기존 파일의 SHA 확인 (업데이트 시 필요)
     sha = None
     try:
-        resp = requests.get(url, headers=headers, timeout=15)
+        resp = requests.get(url, headers=headers, params={"ref": branch}, timeout=15)
         if resp.status_code == 200:
             sha = resp.json().get("sha")
     except:
@@ -61,7 +85,7 @@ def push_backup(backup_bytes: bytes) -> dict:
     payload = {
         "message": f"Auto backup - {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}",
         "content": content_b64,
-        "branch": "main",
+        "branch": branch,
     }
     if sha:
         payload["sha"] = sha
@@ -69,7 +93,7 @@ def push_backup(backup_bytes: bytes) -> dict:
     try:
         resp = requests.put(url, headers=headers, json=payload, timeout=30)
         if resp.status_code in (200, 201):
-            return {"success": True, "message": "GitHub 백업 완료"}
+            return {"success": True, "message": f"GitHub 백업 완료 (branch: {branch})"}
         else:
             return {"success": False, "message": f"GitHub API 오류: {resp.status_code} - {resp.text[:200]}"}
     except Exception as e:
@@ -85,15 +109,16 @@ def pull_backup() -> dict:
     if not token or not repo:
         return {"success": False, "data": None, "message": "GitHub 설정이 없습니다."}
 
+    branch = _get_default_branch(token, repo)
     url = f"https://api.github.com/repos/{repo}/contents/{BACKUP_PATH}"
     headers = _headers(token)
 
     try:
-        resp = requests.get(url, headers=headers, timeout=15)
+        resp = requests.get(url, headers=headers, params={"ref": branch}, timeout=15)
         if resp.status_code == 200:
             content_b64 = resp.json().get("content", "")
             data = base64.b64decode(content_b64)
-            return {"success": True, "data": data, "message": "GitHub 백업 로드 완료"}
+            return {"success": True, "data": data, "message": f"GitHub 백업 로드 완료 (branch: {branch})"}
         elif resp.status_code == 404:
             return {"success": False, "data": None, "message": "GitHub에 백업 파일이 없습니다."}
         else:
