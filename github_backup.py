@@ -116,9 +116,26 @@ def pull_backup() -> dict:
     try:
         resp = requests.get(url, headers=headers, params={"ref": branch}, timeout=15)
         if resp.status_code == 200:
-            content_b64 = resp.json().get("content", "")
-            data = base64.b64decode(content_b64)
-            return {"success": True, "data": data, "message": f"GitHub 백업 로드 완료 (branch: {branch})"}
+            resp_json = resp.json()
+
+            # 방법 1: base64 인코딩된 content (소용량 파일)
+            content_b64 = resp_json.get("content", "")
+            if content_b64:
+                # ★ GitHub API는 base64에 줄바꿈(\n)을 포함시킴 → 제거 필요
+                content_b64 = content_b64.replace("\n", "").replace("\r", "").strip()
+                data = base64.b64decode(content_b64)
+                return {"success": True, "data": data,
+                        "message": f"GitHub 백업 로드 완료 (branch: {branch})"}
+
+            # 방법 2: download_url로 직접 다운로드 (대용량 파일, >1MB)
+            download_url = resp_json.get("download_url", "")
+            if download_url:
+                dl_resp = requests.get(download_url, headers=headers, timeout=30)
+                if dl_resp.status_code == 200:
+                    return {"success": True, "data": dl_resp.content,
+                            "message": f"GitHub 백업 로드 완료 - download_url (branch: {branch})"}
+
+            return {"success": False, "data": None, "message": "백업 파일 내용을 읽을 수 없습니다."}
         elif resp.status_code == 404:
             return {"success": False, "data": None, "message": "GitHub에 백업 파일이 없습니다."}
         else:
